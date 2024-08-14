@@ -32,7 +32,8 @@ add_executable( ${DEMO_NAME}
                 ${BACKOFF_ALGORITHM_SOURCES}
                 ${PKCS_SOURCES}
                 ${PKCS_PAL_POSIX_SOURCES}
-                ${FLEET_PROVISIONING_SOURCES} )
+                ${FLEET_PROVISIONING_SOURCES}
+                main.c )
 
 target_link_libraries( ${DEMO_NAME} PRIVATE
                        tinycbor

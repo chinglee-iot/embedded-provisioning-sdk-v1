@@ -187,11 +187,6 @@ typedef struct PublishPackets
     MQTTPublishInfo_t pubInfo;
 } PublishPackets_t;
 
-/* Each compilation unit must define the NetworkContext struct. */
-struct NetworkContext
-{
-    MbedtlsPkcs11Context_t * pParams;
-};
 /*-----------------------------------------------------------*/
 
 /**
@@ -298,6 +293,7 @@ static uint32_t generateRandomNumber( void );
  * @return false on failure; true on successful connection.
  */
 static bool connectToBrokerWithBackoffRetries( NetworkContext_t * pNetworkContext,
+                                               char * pMqttEndpoint,
                                                CK_SESSION_HANDLE p11Session,
                                                char * pClientCertLabel,
                                                char * pPrivateKeyLabel );
@@ -383,6 +379,7 @@ static uint32_t generateRandomNumber()
 /*-----------------------------------------------------------*/
 
 static bool connectToBrokerWithBackoffRetries( NetworkContext_t * pNetworkContext,
+                                               char * pMqttEndpoint,
                                                CK_SESSION_HANDLE p11Session,
                                                char * pClientCertLabel,
                                                char * pPrivateKeyLabel )
@@ -393,6 +390,9 @@ static bool connectToBrokerWithBackoffRetries( NetworkContext_t * pNetworkContex
     BackoffAlgorithmContext_t reconnectParams;
     MbedtlsPkcs11Credentials_t tlsCredentials = { 0 };
     uint16_t nextRetryBackOff = 0U;
+    size_t xMqttEndpointLength;
+
+    xMqttEndpointLength = strnlen( pMqttEndpoint, 128 );
 
     /* Set the pParams member of the network context with desired transport. */
     pNetworkContext->pParams = &tlsContext;
@@ -435,12 +435,12 @@ static bool connectToBrokerWithBackoffRetries( NetworkContext_t * pNetworkContex
          * to the MQTT broker as specified in AWS_IOT_ENDPOINT and AWS_MQTT_PORT
          * at the demo config header. */
         LogDebug( ( "Establishing a TLS session to %.*s:%d.",
-                    AWS_IOT_ENDPOINT_LENGTH,
-                    AWS_IOT_ENDPOINT,
+                    xMqttEndpointLength,
+                    pMqttEndpoint,
                     AWS_MQTT_PORT ) );
 
         tlsStatus = Mbedtls_Pkcs11_Connect( pNetworkContext,
-                                            AWS_IOT_ENDPOINT,
+                                            pMqttEndpoint,
                                             AWS_MQTT_PORT,
                                             &tlsCredentials,
                                             TRANSPORT_SEND_RECV_TIMEOUT_MS );
@@ -727,7 +727,9 @@ static bool waitForPacketAck( MQTTContext_t * pMqttContext,
 }
 /*-----------------------------------------------------------*/
 
-bool EstablishMqttSession( MQTTPublishCallback_t publishCallback,
+bool EstablishMqttSession( NetworkContext_t * pNetworkContext,
+                           char * pMqttEndpoint,
+                           MQTTPublishCallback_t publishCallback,
                            CK_SESSION_HANDLE p11Session,
                            char * pClientCertLabel,
                            char * pPrivateKeyLabel )
@@ -739,17 +741,21 @@ bool EstablishMqttSession( MQTTPublishCallback_t publishCallback,
     TransportInterface_t transport = { NULL };
     bool createCleanSession = false;
     MQTTContext_t * pMqttContext = &mqttContext;
-    NetworkContext_t * pNetworkContext = &networkContext;
     bool sessionPresent = false;
-
+    size_t mqttEndpointLength;
+    
+    assert( pMqttEndpoint != NULL );
     assert( pMqttContext != NULL );
     assert( pNetworkContext != NULL );
+
+    mqttEndpointLength = strnlen( pMqttEndpoint, 128 );
 
     /* Initialize the mqtt context and network context. */
     ( void ) memset( pMqttContext, 0U, sizeof( MQTTContext_t ) );
     ( void ) memset( pNetworkContext, 0U, sizeof( NetworkContext_t ) );
 
     returnStatus = connectToBrokerWithBackoffRetries( pNetworkContext,
+                                                      pMqttEndpoint,
                                                       p11Session,
                                                       pClientCertLabel,
                                                       pPrivateKeyLabel );
@@ -759,8 +765,8 @@ bool EstablishMqttSession( MQTTPublishCallback_t publishCallback,
         /* Log an error to indicate connection failure after all
          * reconnect attempts are over. */
         LogError( ( "Failed to connect to MQTT broker %.*s.",
-                    AWS_IOT_ENDPOINT_LENGTH,
-                    AWS_IOT_ENDPOINT ) );
+                    ( int )mqttEndpointLength,
+                    pMqttEndpoint ) );
     }
     else
     {
@@ -895,12 +901,11 @@ bool EstablishMqttSession( MQTTPublishCallback_t publishCallback,
 
 /*-----------------------------------------------------------*/
 
-bool DisconnectMqttSession( void )
+bool DisconnectMqttSession( NetworkContext_t * pNetworkContext )
 {
     MQTTStatus_t mqttStatus = MQTTSuccess;
     bool returnStatus = false;
     MQTTContext_t * pMqttContext = &mqttContext;
-    NetworkContext_t * pNetworkContext = &networkContext;
 
     assert( pMqttContext != NULL );
     assert( pNetworkContext != NULL );

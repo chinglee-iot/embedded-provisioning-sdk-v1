@@ -153,6 +153,12 @@ typedef struct MbedtlsPkcs11Credentials
     CK_SESSION_HANDLE p11Session; /**< @brief PKCS #11 session handle. */
 } MbedtlsPkcs11Credentials_t;
 
+/* Each compilation unit must define the NetworkContext struct. */
+struct NetworkContext
+{
+    MbedtlsPkcs11Context_t * pParams;
+};
+
 /**
  * @brief Sets up a mutually authenticated TLS session on top of a TCP
  * connection using the MbedTLS library for TLS and the corePKCS11 library for

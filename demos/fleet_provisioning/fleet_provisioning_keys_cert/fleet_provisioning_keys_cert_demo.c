@@ -466,8 +466,11 @@ static bool unsubscribeFromRegisterThingResponseTopics( void )
  * the Fleet Provisioning library to generate and validate AWS IoT Fleet
  * Provisioning MQTT topics, and use the coreMQTT library to communicate with
  * the AWS IoT Fleet Provisioning APIs. */
-int main( int argc,
-          char ** argv )
+int ProvisionDevicePKCS11WithFP( NetworkContext_t * pNetworkContext,
+                                 CK_SESSION_HANDLE p11Session,
+                                 char * pDeviceSerialNumber,
+                                 char * pMqttEndpoint,
+                                 char * pProvisioningTemplateName )
 {
     bool status = false;
     /* Buffer for holding received certificate until it is saved. */
@@ -483,13 +486,8 @@ int main( int argc,
     char ownershipToken[ OWNERSHIP_TOKEN_BUFFER_LENGTH ];
     size_t ownershipTokenLength;
     bool connectionEstablished = false;
-    CK_SESSION_HANDLE p11Session;
     int demoRunCount = 0;
     CK_RV pkcs11ret = CKR_OK;
-
-    /* Silence compiler warnings about unused variables. */
-    ( void ) argc;
-    ( void ) argv;
 
     do
     {
@@ -499,27 +497,16 @@ int main( int argc,
         certificateIdLength = CERT_ID_BUFFER_LENGTH;
         ownershipTokenLength = OWNERSHIP_TOKEN_BUFFER_LENGTH;
 
-        /* Initialize the PKCS #11 module */
-        pkcs11ret = xInitializePkcs11Session( &p11Session );
+        /* Insert the claim credentials into the PKCS #11 module */
+        status = loadClaimCredentials( p11Session,
+                                       CLAIM_CERT_PATH,
+                                       pkcs11configLABEL_CLAIM_CERTIFICATE,
+                                       CLAIM_PRIVATE_KEY_PATH,
+                                       pkcs11configLABEL_CLAIM_PRIVATE_KEY );
 
-        if( pkcs11ret != CKR_OK )
+        if( status == false )
         {
-            LogError( ( "Failed to initialize PKCS #11." ) );
-            status = false;
-        }
-        else
-        {
-            /* Insert the claim credentials into the PKCS #11 module */
-            status = loadClaimCredentials( p11Session,
-                                           CLAIM_CERT_PATH,
-                                           pkcs11configLABEL_CLAIM_CERTIFICATE,
-                                           CLAIM_PRIVATE_KEY_PATH,
-                                           pkcs11configLABEL_CLAIM_PRIVATE_KEY );
-
-            if( status == false )
-            {
-                LogError( ( "Failed to provision PKCS #11 with claim credentials." ) );
-            }
+            LogError( ( "Failed to provision PKCS #11 with claim credentials." ) );
         }
 
         /**** Connect to AWS IoT Core with provisioning claim credentials *****/
@@ -535,7 +522,9 @@ int main( int argc,
              * connection fails, retries after a timeout. Timeout value will
              * exponentially increase until maximum attempts are reached. */
             LogInfo( ( "Establishing MQTT session with claim certificate..." ) );
-            status = EstablishMqttSession( provisioningPublishCallback,
+            status = EstablishMqttSession( pNetworkContext,
+                                           pMqttEndpoint,
+                                           provisioningPublishCallback,
                                            p11Session,
                                            pkcs11configLABEL_CLAIM_CERTIFICATE,
                                            pkcs11configLABEL_CLAIM_PRIVATE_KEY );
@@ -642,8 +631,8 @@ int main( int argc,
                                                    NETWORK_BUFFER_SIZE,
                                                    ownershipToken,
                                                    ownershipTokenLength,
-                                                   DEVICE_SERIAL_NUMBER,
-                                                   DEVICE_SERIAL_NUMBER_LENGTH,
+                                                   pDeviceSerialNumber,
+                                                   strnlen( pDeviceSerialNumber, 32 ),
                                                    &payloadLength );
         }
 
@@ -704,7 +693,7 @@ int main( int argc,
          * credentials. */
         if( connectionEstablished == true )
         {
-            DisconnectMqttSession();
+            DisconnectMqttSession( pNetworkContext );
             connectionEstablished = false;
         }
 
@@ -713,7 +702,9 @@ int main( int argc,
         if( status == true )
         {
             LogInfo( ( "Establishing MQTT session with provisioned certificate..." ) );
-            status = EstablishMqttSession( provisioningPublishCallback,
+            status = EstablishMqttSession( pNetworkContext,
+                                           pMqttEndpoint,
+                                           provisioningPublishCallback,
                                            p11Session,
                                            pkcs11configLABEL_DEVICE_CERTIFICATE_FOR_TLS,
                                            pkcs11configLABEL_DEVICE_PRIVATE_KEY_FOR_TLS );
@@ -737,11 +728,9 @@ int main( int argc,
         if( connectionEstablished == true )
         {
             /* Close the connection. */
-            DisconnectMqttSession();
+            DisconnectMqttSession( pNetworkContext );
             connectionEstablished = false;
         }
-
-        pkcs11CloseSession( p11Session );
 
         /**** Retry in case of failure ****************************************/
 
@@ -751,6 +740,7 @@ int main( int argc,
         if( status == true )
         {
             LogInfo( ( "Demo iteration %d is successful.", demoRunCount ) );
+            break;
         }
         /* Attempt to retry a failed iteration of demo for up to #FLEET_PROV_MAX_DEMO_LOOP_COUNT times. */
         else if( demoRunCount < FLEET_PROV_MAX_DEMO_LOOP_COUNT )
@@ -766,68 +756,6 @@ int main( int argc,
         }
     } while( status != true );
 
-    /* Log demo success. */
-    if( status == true )
-    {
-        LogInfo( ( "Demo completed successfully." ) );
-
-        #if defined( DOWNLOADED_CERT_WRITE_PATH )
-            {
-                int fd = open( DOWNLOADED_CERT_WRITE_PATH, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR );
-
-                if( -1 != fd )
-                {
-                    const ssize_t writtenBytes = write( fd, certificate, certificateLength );
-
-                    if( writtenBytes == certificateLength )
-                    {
-                        LogInfo( ( "Written %s successfully.", DOWNLOADED_CERT_WRITE_PATH ) );
-                    }
-                    else
-                    {
-                        LogError( ( "Could not write to %s. Error: %s.", DOWNLOADED_CERT_WRITE_PATH, strerror( errno ) ) );
-                    }
-
-                    close( fd );
-                }
-                else
-                {
-                    LogError( ( "Could not open %s. Error: %s.", DOWNLOADED_CERT_WRITE_PATH, strerror( errno ) ) );
-                }
-            }
-        #else /* if defined( DOWNLOADED_CERT_WRITE_PATH ) */
-            LogInfo( ( "NOTE: define DOWNLOADED_CERT_WRITE_PATH in order to have the certificate written to disk." ) );
-        #endif // DOWNLOADED_CERT_WRITE_PATH
-
-        #if defined( DOWNLOADED_PRIVATE_KEY_WRITE_PATH )
-            {
-                int fd = open( DOWNLOADED_PRIVATE_KEY_WRITE_PATH, O_CREAT | O_WRONLY | O_TRUNC, S_IRUSR | S_IWUSR );
-
-                if( -1 != fd )
-                {
-                    const ssize_t writtenBytes = write( fd, privatekey, privatekeyLength );
-
-                    if( writtenBytes == privatekeyLength )
-                    {
-                        LogInfo( ( "Written %s successfully.", DOWNLOADED_PRIVATE_KEY_WRITE_PATH ) );
-                    }
-                    else
-                    {
-                        LogError( ( "Could not write to %s. Error: %s.", DOWNLOADED_PRIVATE_KEY_WRITE_PATH, strerror( errno ) ) );
-                    }
-
-                    close( fd );
-                }
-                else
-                {
-                    LogError( ( "Could not open %s. Error: %s.", DOWNLOADED_PRIVATE_KEY_WRITE_PATH, strerror( errno ) ) );
-                }
-            }
-        #else /* if defined( DOWNLOADED_PRIVATE_KEY_WRITE_PATH ) */
-            LogInfo( ( "NOTE: define DOWNLOADED_PRIVATE_KEY_WRITE_PATH in order to have the private key written to disk." ) );
-        #endif // DOWNLOADED_PRIVATE_KEY_WRITE_PATH
-    }
-
-    return ( status == true ) ? EXIT_SUCCESS : EXIT_FAILURE;
+    return ( status == true ) ? 0 : -1;
 }
 /*-----------------------------------------------------------*/

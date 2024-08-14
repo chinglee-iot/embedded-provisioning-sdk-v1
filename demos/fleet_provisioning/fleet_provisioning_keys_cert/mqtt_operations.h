@@ -50,7 +50,9 @@ typedef void (* MQTTPublishCallback_t )( MQTTPublishInfo_t * pPublishInfo,
  * @return true if an MQTT session is established;
  * false otherwise.
  */
-bool EstablishMqttSession( MQTTPublishCallback_t publishCallback,
+bool EstablishMqttSession( NetworkContext_t * pNetworkContext,
+                           char * pMqttEndpoint,
+                           MQTTPublishCallback_t publishCallback,
                            CK_SESSION_HANDLE p11Session,
                            char * pClientCertLabel,
                            char * pPrivateKeyLabel );
@@ -61,7 +63,7 @@ bool EstablishMqttSession( MQTTPublishCallback_t publishCallback,
  * @return true if the MQTT session was successfully disconnected;
  * false otherwise.
  */
-bool DisconnectMqttSession( void );
+bool DisconnectMqttSession( NetworkContext_t * pNetworkContext );
 
 /**
  * @brief Subscribe to a MQTT topic filter.
