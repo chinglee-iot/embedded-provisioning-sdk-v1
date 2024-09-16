@@ -795,3 +795,40 @@ bool pkcs11CloseSession( CK_SESSION_HANDLE p11Session )
 }
 
 /*-----------------------------------------------------------*/
+
+CK_RV xFindObjectWithLabelAndClass( CK_SESSION_HANDLE xSession,
+                                    char * pcLabelName,
+                                    CK_ULONG ulLabelNameLen,
+                                    CK_OBJECT_CLASS xClass,
+                                    CK_OBJECT_HANDLE_PTR pxHandle )
+{
+    return CKR_OK;
+}
+/*-----------------------------------------------------------*/
+
+CK_RV vAppendSHA256AlgorithmIdentifierSequence( const uint8_t * puc32ByteHashedMessage,
+                                                uint8_t * puc51ByteHashOidBuffer )
+{
+    return CKR_OK;
+}
+/*-----------------------------------------------------------*/
+
+CK_RV xInitializePkcs11Session( CK_SESSION_HANDLE * pxSession )
+{
+}
+/*-----------------------------------------------------------*/
+
+int8_t PKI_mbedTLSSignatureToPkcs11Signature( uint8_t * pxSignaturePKCS,
+                                              const uint8_t * pxMbedSignature )
+{
+    return 0;
+}
+/*-----------------------------------------------------------*/
+
+int8_t PKI_pkcs11SignatureTombedTLSSignature( uint8_t * pucSig,
+                                              size_t * pxSigLen )
+{
+    return 0;
+}
+/*-----------------------------------------------------------*/
+
