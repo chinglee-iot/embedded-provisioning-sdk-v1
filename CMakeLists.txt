@@ -86,6 +86,9 @@ add_subdirectory( platform )
 # Add build configuration for demos.
 add_subdirectory( demos )
 
+# Add build configuration for demos.
+add_subdirectory( tests )
+
 if(DOWNLOAD_CERTS)
     set(CERT_DOWNLOAD_DIR ${DEMOS_DIR}/certificates)
     file(MAKE_DIRECTORY ${CERT_DOWNLOAD_DIR})

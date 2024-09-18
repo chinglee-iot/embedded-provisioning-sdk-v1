@@ -74,6 +74,8 @@ bool iotshdPal_syncQueueSend( iotshdPal_SyncQueue_t * pSyncQueue ,
 {
     uint32_t queueIndex;
     uint8_t * pEnqueuePos;
+    
+    struct timeval now;
     struct timespec timeout;
     int ret = 0;
     bool retStatus = false;
@@ -83,8 +85,15 @@ bool iotshdPal_syncQueueSend( iotshdPal_SyncQueue_t * pSyncQueue ,
     /* Check if the queue if full. */
     while( pSyncQueue->itemsInQueue == pSyncQueue->numberOfQueueItems )
     {
-        clock_gettime(CLOCK_REALTIME, &timeout);
-        timeout.tv_nsec = timeout.tv_nsec + blockTimeMs * 1000000;
+        gettimeofday( &now, NULL );
+        timeout.tv_sec = now.tv_sec + ( blockTimeMs / 1000 );
+        timeout.tv_nsec = ( now.tv_usec + ( blockTimeMs % 1000 ) * 1000 ) * 1000;
+
+        if( timeout.tv_nsec >= 1000000000 )
+        {
+            timeout.tv_sec++;
+            timeout.tv_nsec -= 1000000000;
+        }
 
         ret = pthread_cond_timedwait( &pSyncQueue->condDequeue, &pSyncQueue->mutex, &timeout );
 
@@ -123,6 +132,7 @@ bool iotshdPal_syncQueueReceive( iotshdPal_SyncQueue_t * pSyncQueue,
                                  uint32_t blockTimeMs )
 {
     uint8_t * pDnqueuePos;
+    struct timeval now;
     struct timespec timeout;
     int ret = 0;
     bool retStatus = false;
@@ -132,8 +142,15 @@ bool iotshdPal_syncQueueReceive( iotshdPal_SyncQueue_t * pSyncQueue,
     /* Check if the queue if empty. */
     while( pSyncQueue->itemsInQueue == 0 )
     {
-        clock_gettime(CLOCK_REALTIME, &timeout);
-        timeout.tv_nsec = timeout.tv_nsec + blockTimeMs * 1000000;
+        gettimeofday( &now, NULL );
+        timeout.tv_sec = now.tv_sec + ( blockTimeMs / 1000 );
+        timeout.tv_nsec = ( now.tv_usec + ( blockTimeMs % 1000 ) * 1000 ) * 1000;
+
+        if( timeout.tv_nsec >= 1000000000 )
+        {
+            timeout.tv_sec++;
+            timeout.tv_nsec -= 1000000000;
+        }
 
         ret = pthread_cond_timedwait( &pSyncQueue->condEnqueue, &pSyncQueue->mutex, &timeout );
 

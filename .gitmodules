@@ -19,3 +19,6 @@
 [submodule "libraries/standard/coreMQTT-Agent"]
 	path = libraries/standard/coreMQTT-Agent
 	url = https://github.com/FreeRTOS/coreMQTT-Agent
+[submodule "tests/common/Unity"]
+	path = tests/common/Unity
+	url = https://github.com/ThrowTheSwitch/Unity
