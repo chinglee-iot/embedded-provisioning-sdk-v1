@@ -26,6 +26,10 @@ set( COMMON_TRANSPORT_INCLUDE_PUBLIC_DIRS
      ${CMAKE_CURRENT_LIST_DIR}/transport/include
      ${PLATFORM_DIR}/include )
 
-# OpenSSL transport source files.
+# Pal queue sources
 set( PAL_QUEUE_SOURCES
      ${CMAKE_CURRENT_LIST_DIR}/pal_queue/pal_queue.c )
+
+# Pal event source
+set( PAL_EVENT_SOURCES
+     ${CMAKE_CURRENT_LIST_DIR}/pal_event/pal_event.c )

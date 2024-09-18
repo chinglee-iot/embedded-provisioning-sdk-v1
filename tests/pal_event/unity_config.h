@@ -1,0 +1,1 @@
+#define UNITY_FIXTURE_NO_EXTRAS
