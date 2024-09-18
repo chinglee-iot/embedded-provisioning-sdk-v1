@@ -16,3 +16,6 @@
 [submodule "libraries/standard/corePKCS11"]
 	path = libraries/standard/corePKCS11
 	url = https://github.com/FreeRTOS/corePKCS11
+[submodule "libraries/standard/coreMQTT-Agent"]
+	path = libraries/standard/coreMQTT-Agent
+	url = https://github.com/FreeRTOS/coreMQTT-Agent

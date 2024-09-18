@@ -25,3 +25,7 @@ set( MBEDTLS_PKCS11_TRANSPORT_SOURCES
 set( COMMON_TRANSPORT_INCLUDE_PUBLIC_DIRS
      ${CMAKE_CURRENT_LIST_DIR}/transport/include
      ${PLATFORM_DIR}/include )
+
+# OpenSSL transport source files.
+set( PAL_QUEUE_SOURCES
+     ${CMAKE_CURRENT_LIST_DIR}/pal_queue/pal_queue.c )

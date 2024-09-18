@@ -12,10 +12,14 @@ include(
 
 # Set path to corePKCS11 and it's third party libraries.
 set(COREPKCS11_LOCATION "${CMAKE_SOURCE_DIR}/libraries/standard/corePKCS11")
+set(COREMQTT_AGENT_LOCATION "${CMAKE_SOURCE_DIR}/libraries/standard/coreMQTT-Agent")
 set(CORE_PKCS11_3RDPARTY_LOCATION "${COREPKCS11_LOCATION}/source/dependency/3rdparty")
 
 # Include PKCS #11 library's source and header path variables.
 include( ${COREPKCS11_LOCATION}/pkcsFilePaths.cmake )
+
+# Include coreMQTT-agent source and header path variables.
+include( ${COREMQTT_AGENT_LOCATION}/mqttAgentFilePaths.cmake )
 
 list(APPEND PKCS_SOURCES
     "${CORE_PKCS11_3RDPARTY_LOCATION}/mbedtls_utils/mbedtls_utils.c"
@@ -28,6 +32,7 @@ file( GLOB DEMO_SRCS "*.c*" )
 add_executable( ${DEMO_NAME}
                 ${DEMO_SRCS}
                 ${MQTT_SOURCES}
+                ${MQTT_AGENT_SOURCES}
                 ${MQTT_SERIALIZER_SOURCES}
                 ${BACKOFF_ALGORITHM_SOURCES}
                 ${PKCS_SOURCES}
@@ -39,18 +44,21 @@ target_link_libraries( ${DEMO_NAME} PRIVATE
                        tinycbor
                        mbedtls
                        clock_posix
-                       transport_mbedtls_pkcs11_posix )
+                       transport_mbedtls_pkcs11_posix
+                       pal_queue )
 
 target_include_directories( ${DEMO_NAME}
                             PUBLIC
                               ${LOGGING_INCLUDE_DIRS}
                               ${MQTT_INCLUDE_PUBLIC_DIRS}
+                              ${MQTT_AGENT_INCLUDE_PUBLIC_DIRS}
                               ${BACKOFF_ALGORITHM_INCLUDE_PUBLIC_DIRS}
                               ${PKCS_INCLUDE_PUBLIC_DIRS}
                               ${PKCS_PAL_INCLUDE_PUBLIC_DIRS}
                               ${AWS_DEMO_INCLUDE_DIRS}
                               "${FLEET_PROVISIONING_INCLUDE_PUBLIC_DIRS}"
                               "${CMAKE_SOURCE_DIR}/platform/include"
+                              "${CMAKE_SOURCE_DIR}/platform/posix/pal_queue"
                               "${CMAKE_CURRENT_LIST_DIR}"
                             PRIVATE
                               "${CORE_PKCS11_3RDPARTY_LOCATION}/mbedtls_utils" )

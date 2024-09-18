@@ -472,7 +472,7 @@ int ProvisionDevicePKCS11WithFP( NetworkContext_t * pNetworkContext,
                                  char * pMqttEndpoint,
                                  char * pProvisioningTemplateName )
 {
-    bool status = false;
+    bool status = true;
     /* Buffer for holding received certificate until it is saved. */
     char certificate[ CERT_BUFFER_LENGTH ];
     size_t certificateLength;
@@ -496,18 +496,6 @@ int ProvisionDevicePKCS11WithFP( NetworkContext_t * pNetworkContext,
         privatekeyLength = PRIV_KEY_BUFFER_LENGTH;
         certificateIdLength = CERT_ID_BUFFER_LENGTH;
         ownershipTokenLength = OWNERSHIP_TOKEN_BUFFER_LENGTH;
-
-        /* Insert the claim credentials into the PKCS #11 module */
-        status = loadClaimCredentials( p11Session,
-                                       CLAIM_CERT_PATH,
-                                       pkcs11configLABEL_CLAIM_CERTIFICATE,
-                                       CLAIM_PRIVATE_KEY_PATH,
-                                       pkcs11configLABEL_CLAIM_PRIVATE_KEY );
-
-        if( status == false )
-        {
-            LogError( ( "Failed to provision PKCS #11 with claim credentials." ) );
-        }
 
         /**** Connect to AWS IoT Core with provisioning claim credentials *****/
 

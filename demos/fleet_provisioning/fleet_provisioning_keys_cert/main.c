@@ -5,8 +5,10 @@
 /* corePKCS11 includes. */
 #include "core_pkcs11.h"
 #include "core_pkcs11_config.h"
+#include "pkcs11_operations.h"
 
 #include "mbedtls_pkcs11_posix.h"
+#include "pal_queue.h"
 
 #include "demo_config.h"
 
@@ -63,18 +65,90 @@ static void deviceClosePKCS11Session( CK_SESSION_HANDLE p11Session )
     pkcs11CloseSession( p11Session );
 }
 
+iotshdPal_SyncQueue_t * pSyncQueue = NULL;
+
+void * prvProducerThread( void * arg )
+{
+    int i = 0;
+    printf( "producerThread \r\n" );
+    while( true )
+    {
+        iotshdPal_syncQueueSend( pSyncQueue, &i, 100 );
+        printf( "Send %d\r\n", i );
+        i = i + 1;
+        sleep( 1 );
+    }
+    pthread_exit(NULL);
+}
+
+void * prvConsumerThread( void * arg )
+{
+    int i;
+    bool retStatus;
+
+    printf( "consumerThread \r\n" );
+    while( true )
+    {
+        retStatus = iotshdPal_syncQueueReceive( pSyncQueue, &i, 100 );
+        if( retStatus == true ) printf( "Recv %d\r\n", i );
+    }
+    pthread_exit(NULL);
+}
+
+static void prvPalQueueTest( void )
+{
+    pthread_t producerThread, producerThread1, consumerThread;
+
+    printf( "prvPalQueueTest \r\n" );
+
+    pSyncQueue = iotshdPal_syncQueueCreate( 10, sizeof( int ) );
+
+    /* Create producer thread. */
+    pthread_create( &producerThread, NULL, prvProducerThread, 0 );
+    pthread_create( &producerThread1, NULL, prvProducerThread, 0 );
+
+    /* Create consumer thread. */
+    pthread_create( &consumerThread, NULL, prvConsumerThread, 0 );
+
+    pthread_join( producerThread, NULL);
+    
+    pthread_join( consumerThread, NULL);
+    
+    printf( "prvPalQueueTest done\r\n" );
+
+    while( 1 );
+}
+
 void main( void )
 {
+#if 1
+    prvPalQueueTest();
+#else
     int retApplication;
     int retFPResult;
     char deviceSerialNumber[ DEVICE_SERIAL_NUMBER_MAX ];
     CK_SESSION_HANDLE p11Session;
+    bool status;
     
     /* Device platform initialization code. */
     devicePlatformInitialize();
 
+    /* Initialize the PKCS11 session for cryptographic operation. */
+    deviceInitializePKCS11Session( &p11Session );
+
     /* Check device provisioned. */
     deviceWifiProvisioning();
+
+    /* Insert the claim credentials into the PKCS #11 module */
+    status = loadClaimCredentials( p11Session,
+                                   CLAIM_CERT_PATH,
+                                   pkcs11configLABEL_CLAIM_CERTIFICATE,
+                                   CLAIM_PRIVATE_KEY_PATH,
+                                   pkcs11configLABEL_CLAIM_PRIVATE_KEY );
+    if( status == false )
+    {
+        LogError( ( "Failed to provision PKCS #11 with claim credentials." ) );
+    }
 
     /* Network connection. */
     deviceWIFIConnect();
@@ -82,8 +156,6 @@ void main( void )
     /* Acquire the device serial number from device function. */
     deviceGetSerialNumber( deviceSerialNumber );
 
-    /* Initialize the PKCS11 session for cryptographic operation. */
-    deviceInitializePKCS11Session( &p11Session );
 
     for(;;)
     {
@@ -115,4 +187,5 @@ void main( void )
     }
 
     deviceClosePKCS11Session( p11Session );
+#endif
 }
