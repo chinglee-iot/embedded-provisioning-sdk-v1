@@ -8,11 +8,16 @@
 #include "pkcs11_operations.h"
 
 #include "mbedtls_pkcs11_posix.h"
-#include "pal_queue.h"
+
+#include "mqtt_agent.h"
 
 #include "demo_config.h"
 
+/*-----------------------------------------------------------*/
+
 #define DEVICE_SERIAL_NUMBER_MAX    32
+
+/*-----------------------------------------------------------*/
 
 static struct NetworkContext networkContext = { 0 };
 static char mqttEndpoint[] = AWS_IOT_ENDPOINT;
@@ -24,6 +29,39 @@ extern int ProvisionDevicePKCS11WithFP( NetworkContext_t * pNetworkContext,
                                         char * pDeviceSerialNumber,
                                         char * pMqttEndpoint,
                                         char * pProvisioningTemplateName );
+
+/*-----------------------------------------------------------*/
+
+/**
+ * @brief Thread handle data structure definition.
+ */
+typedef void * FRTestThreadHandle_t;
+
+/**
+ * @brief Thread function to be executed in ThreadCreate_t function.
+ *
+ * @param[in] pParam The pParam parameter passed in ThreadCreate_t function.
+ */
+typedef void ( * FRTestThreadFunction_t )( void * pParam );
+
+FRTestThreadHandle_t FRTest_ThreadCreate( FRTestThreadFunction_t threadFunc, void * pParam )
+{
+    FRTestThreadHandle_t threadHandle = NULL;
+
+    int err = 0;
+    pthread_t * pThreadid = NULL;
+    pThreadid = ( FRTestThreadHandle_t ) malloc( sizeof( pthread_t ) );
+    threadHandle = pThreadid;
+
+    err = pthread_create( pThreadid, NULL, threadFunc, pParam );
+    if( err != 0 )
+    {
+        return NULL;
+    }
+    return threadHandle;
+}
+
+/*-----------------------------------------------------------*/
 
 static void devicePlatformInitialize( void )
 {
@@ -46,12 +84,47 @@ static void establisihMQTTConnect( void )
 {
 }
 
-static int applicationLoop( void )
+void prvDataModelHandlerThread( void * pParam )
 {
+    MQTTPublishInfo_t xPublishInfo = { 0 };
+
+    iotshdDev_MQTTAgentUserContext_t * pUserContext;
+
+    xPublishInfo.qos = 1;
+    xPublishInfo.pTopicName = "test";
+    xPublishInfo.topicNameLength = 4;
+    xPublishInfo.pPayload = "HelloWorld";
+    xPublishInfo.payloadLength = 10;
+
+    pUserContext = iotshdDev_MQTTAgentCreateUserContext( 10 );
+
+    while( 1 )
+    {
+        printf( "publish message\r\n" );
+        iotshdDev_MQTTAgentPublish( pUserContext, &xPublishInfo, 100 );
+        sleep( 5 );
+    }
 }
 
-static void disconnectMQTT( void )
+static int applicationLoop( CK_SESSION_HANDLE p11Session )
 {
+    MQTTStatus_t mqttStatus;
+    FRTestThreadHandle_t dataModelHandlerThread;
+
+    printf( "======================== application loop =================\r\n" );
+
+    /* Initialize the MQTT agent. */
+    mqttStatus = iotshdDev_MQTTAgentInit( &networkContext );
+
+    /* Create another task for MQTT commands. */
+    dataModelHandlerThread = FRTest_ThreadCreate( prvDataModelHandlerThread, NULL );
+
+    /* Create another application task here. */
+    mqttStatus = iotshdDev_MQTTAgentThreadLoop( &networkContext,
+                                                mqttEndpoint,
+                                                p11Session );
+
+    return 0;
 }
 
 static void deviceInitializePKCS11Session( CK_SESSION_HANDLE * p11Session )
@@ -65,65 +138,8 @@ static void deviceClosePKCS11Session( CK_SESSION_HANDLE p11Session )
     pkcs11CloseSession( p11Session );
 }
 
-iotshdPal_SyncQueue_t * pSyncQueue = NULL;
-
-void * prvProducerThread( void * arg )
-{
-    int i = 0;
-    printf( "producerThread \r\n" );
-    while( true )
-    {
-        iotshdPal_syncQueueSend( pSyncQueue, &i, 100 );
-        printf( "Send %d\r\n", i );
-        i = i + 1;
-        sleep( 1 );
-    }
-    pthread_exit(NULL);
-}
-
-void * prvConsumerThread( void * arg )
-{
-    int i;
-    bool retStatus;
-
-    printf( "consumerThread \r\n" );
-    while( true )
-    {
-        retStatus = iotshdPal_syncQueueReceive( pSyncQueue, &i, 100 );
-        if( retStatus == true ) printf( "Recv %d\r\n", i );
-    }
-    pthread_exit(NULL);
-}
-
-static void prvPalQueueTest( void )
-{
-    pthread_t producerThread, producerThread1, consumerThread;
-
-    printf( "prvPalQueueTest \r\n" );
-
-    pSyncQueue = iotshdPal_syncQueueCreate( 10, sizeof( int ) );
-
-    /* Create producer thread. */
-    pthread_create( &producerThread, NULL, prvProducerThread, 0 );
-    pthread_create( &producerThread1, NULL, prvProducerThread, 0 );
-
-    /* Create consumer thread. */
-    pthread_create( &consumerThread, NULL, prvConsumerThread, 0 );
-
-    pthread_join( producerThread, NULL);
-    
-    pthread_join( consumerThread, NULL);
-    
-    printf( "prvPalQueueTest done\r\n" );
-
-    while( 1 );
-}
-
 void main( void )
 {
-#if 1
-    prvPalQueueTest();
-#else
     int retApplication;
     int retFPResult;
     char deviceSerialNumber[ DEVICE_SERIAL_NUMBER_MAX ];
@@ -170,7 +186,7 @@ void main( void )
         }
 
         /* At this point, MQTT is connected. */
-        retApplication = applicationLoop();
+        retApplication = applicationLoop( p11Session );
 
         /*
         switch( retApplication )
@@ -187,5 +203,4 @@ void main( void )
     }
 
     deviceClosePKCS11Session( p11Session );
-#endif
 }

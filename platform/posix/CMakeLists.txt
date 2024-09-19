@@ -23,3 +23,4 @@ add_subdirectory( ${CMAKE_CURRENT_LIST_DIR}/transport )
 
 # Add the PAL queue targets
 add_subdirectory( ${CMAKE_CURRENT_LIST_DIR}/pal_queue )
+add_subdirectory( ${CMAKE_CURRENT_LIST_DIR}/pal_event )

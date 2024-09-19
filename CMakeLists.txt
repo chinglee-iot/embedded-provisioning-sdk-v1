@@ -4,6 +4,8 @@ project( AwsIotDeviceSdkEmbeddedC
          VERSION 202211.00
          LANGUAGES C CXX )
 
+set( CMAKE_BUILD_TYPE "Debug" )
+
 # Allow the project to be organized into folders.
 set_property( GLOBAL PROPERTY USE_FOLDERS ON )
 

@@ -14,6 +14,7 @@ include(
 set(COREPKCS11_LOCATION "${CMAKE_SOURCE_DIR}/libraries/standard/corePKCS11")
 set(COREMQTT_AGENT_LOCATION "${CMAKE_SOURCE_DIR}/libraries/standard/coreMQTT-Agent")
 set(CORE_PKCS11_3RDPARTY_LOCATION "${COREPKCS11_LOCATION}/source/dependency/3rdparty")
+set(MQTT_AGENT_LOCATION "${CMAKE_SOURCE_DIR}/libraries/mqtt_agent")
 
 # Include PKCS #11 library's source and header path variables.
 include( ${COREPKCS11_LOCATION}/pkcsFilePaths.cmake )
@@ -21,12 +22,20 @@ include( ${COREPKCS11_LOCATION}/pkcsFilePaths.cmake )
 # Include coreMQTT-agent source and header path variables.
 include( ${COREMQTT_AGENT_LOCATION}/mqttAgentFilePaths.cmake )
 
+# Include coreMQTT-agent source and header path variables.
+include( ${MQTT_AGENT_LOCATION}/mqttAgentFilePaths.cmake )
+
 list(APPEND PKCS_SOURCES
     "${CORE_PKCS11_3RDPARTY_LOCATION}/mbedtls_utils/mbedtls_utils.c"
 )
 
 # CPP files are searched for supporting CI build checks that verify C++ linkage of the Fleet Provisioning library
 file( GLOB DEMO_SRCS "*.c*" )
+
+# subscription manager
+set( MQTT_AGENT_SUBSCRIPTION_MANAGER
+     "${CMAKE_CURRENT_LIST_DIR}/source/core_mqtt.c"
+     "${CMAKE_CURRENT_LIST_DIR}/source/core_mqtt_state.c" )
 
 # Demo target.
 add_executable( ${DEMO_NAME}
@@ -38,6 +47,7 @@ add_executable( ${DEMO_NAME}
                 ${PKCS_SOURCES}
                 ${PKCS_PAL_POSIX_SOURCES}
                 ${FLEET_PROVISIONING_SOURCES}
+                ${SDK_MQTT_AGENT_SOURCES}
                 main.c )
 
 target_link_libraries( ${DEMO_NAME} PRIVATE
@@ -45,7 +55,8 @@ target_link_libraries( ${DEMO_NAME} PRIVATE
                        mbedtls
                        clock_posix
                        transport_mbedtls_pkcs11_posix
-                       pal_queue )
+                       pal_queue
+                       pal_event )
 
 target_include_directories( ${DEMO_NAME}
                             PUBLIC
@@ -56,9 +67,11 @@ target_include_directories( ${DEMO_NAME}
                               ${PKCS_INCLUDE_PUBLIC_DIRS}
                               ${PKCS_PAL_INCLUDE_PUBLIC_DIRS}
                               ${AWS_DEMO_INCLUDE_DIRS}
+                              ${SDK_MQTT_AGENT_INCLUDE_PUBLIC_DIRS}
                               "${FLEET_PROVISIONING_INCLUDE_PUBLIC_DIRS}"
                               "${CMAKE_SOURCE_DIR}/platform/include"
                               "${CMAKE_SOURCE_DIR}/platform/posix/pal_queue"
+                              "${CMAKE_SOURCE_DIR}/platform/posix/pal_event"
                               "${CMAKE_CURRENT_LIST_DIR}"
                             PRIVATE
                               "${CORE_PKCS11_3RDPARTY_LOCATION}/mbedtls_utils" )

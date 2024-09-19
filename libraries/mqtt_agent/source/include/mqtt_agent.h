@@ -4,9 +4,12 @@
 
 #include "core_mqtt.h"
 #include "core_pkcs11.h"
+#include "pal_event.h"
 
 typedef struct iotshdDev_MQTTAgentUserContext
 {
+    MQTTStatus_t xReturnStatus;
+    iotshdPal_SyncEvent_t * pSyncEvent;
 } iotshdDev_MQTTAgentUserContext_t;
 
 typedef struct iotshdDev_MQTTAgentQueueItem

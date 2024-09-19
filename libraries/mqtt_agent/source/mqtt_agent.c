@@ -12,6 +12,13 @@
 /*Include backoff algorithm header for retry logic.*/
 #include "backoff_algorithm.h"
 
+#include "subscription_manager.h"
+#include "pal_queue.h"
+#include "freertos_agent_message.h"
+#include "freertos_command_pool.h"
+
+#include "demo_config.h"
+
 /* Clock for timer. */
 #include "clock.h"
 
@@ -25,6 +32,13 @@
 #define CONNECTION_RETRY_MAX_ATTEMPTS            ( 5U )
 #define TRANSPORT_SEND_RECV_TIMEOUT_MS           ( 1000U )
 
+/**
+ * @brief The length of the queue used to hold commands for the agent.
+ */
+#ifndef MQTT_AGENT_COMMAND_QUEUE_LENGTH
+    #define MQTT_AGENT_COMMAND_QUEUE_LENGTH    ( 10U )
+#endif
+
 /*-----------------------------------------------------------*/
 
 MQTTAgentContext_t xGlobalMqttAgentContext;
@@ -34,6 +48,19 @@ static uint8_t xNetworkBuffer[ MQTT_AGENT_NETWORK_BUFFER_SIZE ];
  * @brief The parameters for MbedTLS operation.
  */
 static MbedtlsPkcs11Context_t tlsContext = { 0 };
+
+/**
+ * @brief The global array of subscription elements.
+ *
+ * @note No thread safety is required to this array, since the updates the array
+ * elements are done only from one task at a time. The subscription manager
+ * implementation expects that the array of the subscription elements used for
+ * storing subscriptions to be initialized to 0. As this is a global array, it
+ * will be initialized to 0 by default.
+ */
+SubscriptionElement_t xGlobalSubscriptionList[ SUBSCRIPTION_MANAGER_MAX_SUBSCRIPTIONS ];
+
+static MQTTAgentMessageContext_t xCommandQueue;
 
 /*-----------------------------------------------------------*/
 
@@ -106,7 +133,7 @@ static bool connectToBrokerWithBackoffRetries( NetworkContext_t * pNetworkContex
         /* Establish a TLS session with the MQTT broker. This example connects
          * to the MQTT broker as specified in AWS_IOT_ENDPOINT and AWS_MQTT_PORT
          * at the demo config header. */
-        LogDebug( ( "Establishing a TLS session to %.*s:%d.",
+        LogInfo( ( "Establishing a TLS session to %.*s:%d.",
                     xMqttEndpointLength,
                     pMqttEndpoint,
                     AWS_MQTT_PORT ) );
@@ -120,6 +147,7 @@ static bool connectToBrokerWithBackoffRetries( NetworkContext_t * pNetworkContex
         if( tlsStatus == MBEDTLS_PKCS11_SUCCESS )
         {
             /* Connection successful. */
+            printf( "TLS connected\r\n" );
             returnStatus = true;
         }
         else
@@ -145,6 +173,16 @@ static bool connectToBrokerWithBackoffRetries( NetworkContext_t * pNetworkContex
 }
 
 /*-----------------------------------------------------------*/
+
+/**
+ * @brief The MQTT metrics string expected by AWS IoT MQTT Broker.
+ */
+#define METRICS_STRING                           "?SDK=" OS_NAME "&Version=" OS_VERSION "&Platform=" HARDWARE_PLATFORM_NAME "&MQTTLib=" MQTT_LIB
+
+/**
+ * @brief The length of the MQTT metrics string.
+ */
+#define METRICS_STRING_LENGTH                    ( ( uint16_t ) ( sizeof( METRICS_STRING ) - 1 ) )
 
 static MQTTStatus_t prvMQTTConnect( bool xCleanSession )
 {
@@ -175,8 +213,10 @@ static MQTTStatus_t prvMQTTConnect( bool xCleanSession )
     xConnectInfo.keepAliveSeconds = 60;
 
     /* Append metrics string when connecting to AWS IoT Core with custom auth */
-    xConnectInfo.pUserName = NULL;
-    xConnectInfo.userNameLength = 0;
+    xConnectInfo.pUserName = METRICS_STRING;
+    xConnectInfo.userNameLength = METRICS_STRING_LENGTH;
+    xConnectInfo.pPassword = NULL;
+    xConnectInfo.passwordLength = 0U;
 
     /* Send MQTT CONNECT packet to broker. MQTT's Last Will and Testament feature
      * is not used in this demo, so it is passed as NULL. */
@@ -205,19 +245,61 @@ static MQTTStatus_t prvMQTTConnect( bool xCleanSession )
 
 /*-----------------------------------------------------------*/
 
+static void prvIncomingPublishCallback( MQTTAgentContext_t * pMqttAgentContext,
+                                        uint16_t packetId,
+                                        MQTTPublishInfo_t * pxPublishInfo )
+{
+    bool xPublishHandled = false;
+    char cOriginalChar, * pcLocation;
+
+    ( void ) packetId;
+
+    /* Fan out the incoming publishes to the callbacks registered using
+     * subscription manager. */
+    xPublishHandled = handleIncomingPublishes( ( SubscriptionElement_t * ) pMqttAgentContext->pIncomingCallbackContext,
+                                               pxPublishInfo );
+
+    /* If there are no callbacks to handle the incoming publishes,
+     * handle it as an unsolicited publish. */
+    if( xPublishHandled != true )
+    {
+        /* Ensure the topic string is terminated for printing.  This will over-
+         * write the message ID, which is restored afterwards. */
+        pcLocation = ( char * ) &( pxPublishInfo->pTopicName[ pxPublishInfo->topicNameLength ] );
+        cOriginalChar = *pcLocation;
+        *pcLocation = 0x00;
+        LogWarn( ( "WARN:  Received an unsolicited publish from topic %s", pxPublishInfo->pTopicName ) );
+        *pcLocation = cOriginalChar;
+    }
+}
+
+/*-----------------------------------------------------------*/
+
 MQTTStatus_t iotshdDev_MQTTAgentInit( NetworkContext_t * pxNetworkContext )
 {
     TransportInterface_t xTransport;
     MQTTStatus_t xReturn;
     MQTTFixedBuffer_t xFixedBuffer = { .pBuffer = xNetworkBuffer, .size = MQTT_AGENT_NETWORK_BUFFER_SIZE };
 
-    MQTTAgentMessageInterface_t messageInterface = { NULL };
+    MQTTAgentMessageInterface_t messageInterface =
+    {
+        .pMsgCtx        = NULL,
+        .send           = Agent_MessageSend,
+        .recv           = Agent_MessageReceive,
+        .getCommand     = Agent_GetCommand,
+        .releaseCommand = Agent_ReleaseCommand
+    };
+
+    xCommandQueue.queue = iotshdPal_syncQueueCreate( MQTT_AGENT_COMMAND_QUEUE_LENGTH,
+                                                     sizeof( MQTTAgentCommand_t * ) );
+    messageInterface.pMsgCtx = &xCommandQueue;
+    Agent_InitializePool();
 
     /* Fill in Transport Interface send and receive function pointers. */
     xTransport.pNetworkContext = pxNetworkContext;
     xTransport.send = Mbedtls_Pkcs11_Send;
     xTransport.recv = Mbedtls_Pkcs11_Recv;
-    xTransport.writev = NULL;
+    xTransport.writev = NULL;    
 
     /* Initialize MQTT library. */
     xReturn = MQTTAgent_Init( &xGlobalMqttAgentContext,
@@ -225,8 +307,8 @@ MQTTStatus_t iotshdDev_MQTTAgentInit( NetworkContext_t * pxNetworkContext )
                               &xFixedBuffer,
                               &xTransport,
                               Clock_GetTimeMs,
-                              NULL,
-                              NULL );
+                              prvIncomingPublishCallback,
+                              xGlobalSubscriptionList );
 
     return xReturn;
 }
@@ -241,6 +323,18 @@ MQTTStatus_t iotshdDev_MQTTAgentThreadLoop( NetworkContext_t * pNetworkContext,
     bool xNetworkResult;
     MQTTStatus_t xMQTTStatus = MQTTSuccess, xConnectStatus = MQTTSuccess;
     MQTTContext_t * pMqttContext = &( xGlobalMqttAgentContext.mqttContext );
+
+    ( void ) memset( pNetworkContext, 0U, sizeof( NetworkContext_t ) );
+
+    xNetworkResult = connectToBrokerWithBackoffRetries( pNetworkContext,
+                                                        pSmarthomeEndpoint,
+                                                        pxSession,
+                                                        pkcs11configLABEL_DEVICE_CERTIFICATE_FOR_TLS,
+                                                        pkcs11configLABEL_DEVICE_PRIVATE_KEY_FOR_TLS );
+    pMqttContext->connectStatus = MQTTNotConnected;
+
+    /* MQTT Connect with a persistent session. */
+    xConnectStatus = prvMQTTConnect( true );
 
     do
     {
@@ -291,7 +385,20 @@ MQTTStatus_t iotshdDev_MQTTAgentStop( void )
 
 iotshdDev_MQTTAgentUserContext_t * iotshdDev_MQTTAgentCreateUserContext( uint32_t incommingPublishQueueSize )
 {
-    return NULL;
+    iotshdDev_MQTTAgentUserContext_t * pUserContext;
+
+    pUserContext = ( iotshdDev_MQTTAgentUserContext_t * ) malloc( sizeof( iotshdDev_MQTTAgentUserContext_t ) );
+    if( pUserContext != NULL )
+    {
+        pUserContext->pSyncEvent = iotshdPal_syncEventCreate();
+        if( pUserContext->pSyncEvent == NULL )
+        {
+            free( pUserContext );
+            pUserContext = NULL;
+        }
+    }
+
+    return pUserContext;
 }
 
 /**
@@ -301,13 +408,61 @@ iotshdDev_MQTTAgentUserContext_t * iotshdDev_MQTTAgentCreateUserContext( uint32_
  */
 void iotshdDev_MQTTAgentDeleteUserContext( iotshdDev_MQTTAgentUserContext_t * pUserContext )
 {
+    if( pUserContext != NULL )
+    {
+        if( pUserContext->pSyncEvent != NULL )
+        {
+            free( pUserContext->pSyncEvent );
+            pUserContext->pSyncEvent = NULL;
+        }
+        free( pUserContext );
+    }
+}
+
+static void prvAgentPublishCommandCallback( iotshdDev_MQTTAgentUserContext_t * pUserContext,
+                                           MQTTAgentReturnInfo_t * pxReturnInfo )
+{
+    /* Store the result in the application defined context so the task that
+     * initiated the publish can check the operation's status. */
+    pUserContext->xReturnStatus = pxReturnInfo->returnCode;
+
+    if( pUserContext->pSyncEvent != NULL )
+    {
+        /* Send the context's ulNotificationValue as the notification value so
+         * the receiving task can check the value it set in the context matches
+         * the value it receives in the notification. */
+        iotshdPal_syncEventSet( pUserContext->pSyncEvent );
+    }
 }
 
 MQTTStatus_t iotshdDev_MQTTAgentPublish( iotshdDev_MQTTAgentUserContext_t * pUserContext,
                                          MQTTPublishInfo_t * pPublishInfo,
                                          uint32_t blockTimeMs )
 {
-    return MQTTSuccess;
+    MQTTStatus_t xCommandAdded;
+    MQTTAgentCommandInfo_t xCommandParams = { 0 };
+    bool retStatus;
+
+    xCommandParams.blockTimeMs = blockTimeMs;
+    xCommandParams.cmdCompleteCallback = prvAgentPublishCommandCallback;
+    xCommandParams.pCmdCompleteCallbackContext = pUserContext;
+
+    xCommandAdded = MQTTAgent_Publish( &xGlobalMqttAgentContext,
+                                       pPublishInfo,
+                                       &xCommandParams );
+
+    /* Waiting for callback notification. */
+    if( xCommandAdded == MQTTSuccess )
+    {
+        retStatus = iotshdPal_syncEventWait( pUserContext->pSyncEvent, 1000 );
+
+        if( retStatus == true )
+        {
+            xCommandAdded = pUserContext->xReturnStatus;
+        }
+    }
+
+    return xCommandAdded;
 }
 
 MQTTStatus_t iotshdDev_MQTTAgentAddSubscription( iotshdDev_MQTTAgentUserContext_t * pUserContext,
