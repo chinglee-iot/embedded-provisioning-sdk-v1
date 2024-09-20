@@ -3,21 +3,30 @@
 #define MQTT_AGENT_H_
 
 #include "core_mqtt.h"
+#include "core_mqtt_agent.h"
 #include "core_pkcs11.h"
+
 #include "pal_event.h"
+#include "pal_queue.h"
+
+typedef struct iotshdDev_MQTTAgentQueueItem
+{
+    MQTTPublishInfo_t publishInfo;
+    uint8_t * topicPayloadBuffer;
+    size_t topicPayloadBufferSize;
+} iotshdDev_MQTTAgentQueueItem_t;
 
 typedef struct iotshdDev_MQTTAgentUserContext
 {
     MQTTStatus_t xReturnStatus;
     iotshdPal_SyncEvent_t * pSyncEvent;
-} iotshdDev_MQTTAgentUserContext_t;
 
-typedef struct iotshdDev_MQTTAgentQueueItem
-{
-    MQTTPublishInfo_t publishInfo;
-    void * topicPayloadBuffer;
-    size_t topicPayloadBufferSize;
-} iotshdDev_MQTTAgentQueueItem_t;
+    iotshdPal_SyncQueue_t * pIncommingPublishQueue;
+    iotshdPal_SyncQueue_t * pFreePublishMessageQueue;
+    uint32_t queueSize;
+
+    iotshdDev_MQTTAgentQueueItem_t * pQueueItems;
+} iotshdDev_MQTTAgentUserContext_t;
 
 /**
  * @brief Callback function called when receiving a publish.

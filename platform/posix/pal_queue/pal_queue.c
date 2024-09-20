@@ -108,8 +108,8 @@ bool iotshdPal_syncQueueSend( iotshdPal_SyncQueue_t * pSyncQueue ,
     if( ret == 0 )
     {
         pSyncQueue->itemsInQueue = pSyncQueue->itemsInQueue + 1;
-        queueIndex = ( pSyncQueue->enqueueIndex + pSyncQueue->numberOfQueueItems ) % pSyncQueue->numberOfQueueItems;
-        pSyncQueue->enqueueIndex = pSyncQueue->enqueueIndex + 1;
+        queueIndex = pSyncQueue->enqueueIndex;
+        pSyncQueue->enqueueIndex = ( pSyncQueue->enqueueIndex + 1 ) % pSyncQueue->numberOfQueueItems;
 
         pEnqueuePos = ( uint8_t * )( &pSyncQueue->pBuffer[ queueIndex * pSyncQueue->queueItemSize ] );
         memcpy( pEnqueuePos, pQueueItemToSend, pSyncQueue->queueItemSize );

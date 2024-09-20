@@ -32,12 +32,17 @@
 #define CONNECTION_RETRY_MAX_ATTEMPTS            ( 5U )
 #define TRANSPORT_SEND_RECV_TIMEOUT_MS           ( 1000U )
 
+#define mqttexampleMAX_COMMAND_SEND_BLOCK_TIME_MS   ( 1000U )
+
 /**
  * @brief The length of the queue used to hold commands for the agent.
  */
 #ifndef MQTT_AGENT_COMMAND_QUEUE_LENGTH
     #define MQTT_AGENT_COMMAND_QUEUE_LENGTH    ( 10U )
 #endif
+
+#define iotshdPal_Malloc    malloc
+#define iotshdPal_Free      free
 
 /*-----------------------------------------------------------*/
 
@@ -174,16 +179,6 @@ static bool connectToBrokerWithBackoffRetries( NetworkContext_t * pNetworkContex
 
 /*-----------------------------------------------------------*/
 
-/**
- * @brief The MQTT metrics string expected by AWS IoT MQTT Broker.
- */
-#define METRICS_STRING                           "?SDK=" OS_NAME "&Version=" OS_VERSION "&Platform=" HARDWARE_PLATFORM_NAME "&MQTTLib=" MQTT_LIB
-
-/**
- * @brief The length of the MQTT metrics string.
- */
-#define METRICS_STRING_LENGTH                    ( ( uint16_t ) ( sizeof( METRICS_STRING ) - 1 ) )
-
 static MQTTStatus_t prvMQTTConnect( bool xCleanSession )
 {
     MQTTStatus_t xResult;
@@ -213,8 +208,8 @@ static MQTTStatus_t prvMQTTConnect( bool xCleanSession )
     xConnectInfo.keepAliveSeconds = 60;
 
     /* Append metrics string when connecting to AWS IoT Core with custom auth */
-    xConnectInfo.pUserName = METRICS_STRING;
-    xConnectInfo.userNameLength = METRICS_STRING_LENGTH;
+    xConnectInfo.pUserName = NULL;
+    xConnectInfo.userNameLength = 0;
     xConnectInfo.pPassword = NULL;
     xConnectInfo.passwordLength = 0U;
 
@@ -383,21 +378,42 @@ MQTTStatus_t iotshdDev_MQTTAgentStop( void )
     return MQTTSuccess;
 }
 
+
 iotshdDev_MQTTAgentUserContext_t * iotshdDev_MQTTAgentCreateUserContext( uint32_t incommingPublishQueueSize )
 {
-    iotshdDev_MQTTAgentUserContext_t * pUserContext;
+    uint32_t i; 
+    iotshdDev_MQTTAgentUserContext_t * pUserContext = NULL;
+    iotshdDev_MQTTAgentQueueItem_t * pQueueItem;
 
-    pUserContext = ( iotshdDev_MQTTAgentUserContext_t * ) malloc( sizeof( iotshdDev_MQTTAgentUserContext_t ) );
+    pUserContext = iotshdPal_Malloc( sizeof( iotshdDev_MQTTAgentUserContext_t ) );
+
     if( pUserContext != NULL )
     {
+        memset( pUserContext, 0, sizeof( iotshdDev_MQTTAgentUserContext_t ) );
+
         pUserContext->pSyncEvent = iotshdPal_syncEventCreate();
-        if( pUserContext->pSyncEvent == NULL )
+        if( pUserContext->pSyncEvent != NULL )
         {
-            free( pUserContext );
-            pUserContext = NULL;
+            pUserContext->queueSize = incommingPublishQueueSize;
+
+            if( incommingPublishQueueSize > 0 )
+            {
+                pUserContext->pIncommingPublishQueue = iotshdPal_syncQueueCreate( incommingPublishQueueSize, sizeof( iotshdDev_MQTTAgentQueueItem_t * ) );
+                pUserContext->pFreePublishMessageQueue = iotshdPal_syncQueueCreate( incommingPublishQueueSize, sizeof( iotshdDev_MQTTAgentQueueItem_t * ) );
+
+                pUserContext->pQueueItems = iotshdPal_Malloc( incommingPublishQueueSize * sizeof( iotshdDev_MQTTAgentQueueItem_t ) );
+                memset( pUserContext->pQueueItems, 0, incommingPublishQueueSize * sizeof( iotshdDev_MQTTAgentQueueItem_t ) );
+                for( i = 0; i < incommingPublishQueueSize; i++ )
+                {
+                    pQueueItem = &pUserContext->pQueueItems[ i ];
+                    iotshdPal_syncQueueSend( pUserContext->pFreePublishMessageQueue,
+                                             &pQueueItem,
+                                             0 );
+                }
+            }
         }
     }
-
+    
     return pUserContext;
 }
 
@@ -408,14 +424,46 @@ iotshdDev_MQTTAgentUserContext_t * iotshdDev_MQTTAgentCreateUserContext( uint32_
  */
 void iotshdDev_MQTTAgentDeleteUserContext( iotshdDev_MQTTAgentUserContext_t * pUserContext )
 {
+    iotshdDev_MQTTAgentQueueItem_t * pQueueItem;
     if( pUserContext != NULL )
     {
         if( pUserContext->pSyncEvent != NULL )
         {
-            free( pUserContext->pSyncEvent );
+            iotshdPal_Free( pUserContext->pSyncEvent );
             pUserContext->pSyncEvent = NULL;
         }
-        free( pUserContext );
+
+        if( pUserContext->pFreePublishMessageQueue != NULL )
+        {
+            iotshdPal_syncQueueDelete( pUserContext->pFreePublishMessageQueue );
+            while( iotshdPal_syncQueueReceive( pUserContext->pFreePublishMessageQueue, ( void * ) &pQueueItem, 0 ) == true )
+            {
+                iotshdPal_Free( pQueueItem->topicPayloadBuffer );
+                pQueueItem->topicPayloadBuffer = NULL;
+                pQueueItem->topicPayloadBufferSize = 0;
+            }
+            pUserContext->pFreePublishMessageQueue = NULL;
+        }
+
+        if( pUserContext->pIncommingPublishQueue != NULL )
+        {
+            iotshdPal_syncQueueDelete( pUserContext->pIncommingPublishQueue );
+            while( iotshdPal_syncQueueReceive( pUserContext->pFreePublishMessageQueue, ( void * ) &pQueueItem, 0 ) == true )
+            {
+                iotshdPal_Free( pQueueItem->topicPayloadBuffer );
+                pQueueItem->topicPayloadBuffer = NULL;
+                pQueueItem->topicPayloadBufferSize = 0;
+            }
+            pUserContext->pIncommingPublishQueue = NULL;
+        }
+
+        if( pUserContext->pQueueItems != NULL )
+        {
+            iotshdPal_Free( pUserContext->pQueueItems );
+            pUserContext->pQueueItems = NULL;
+        }
+
+        iotshdPal_Free( pUserContext );
     }
 }
 
@@ -465,6 +513,63 @@ MQTTStatus_t iotshdDev_MQTTAgentPublish( iotshdDev_MQTTAgentUserContext_t * pUse
     return xCommandAdded;
 }
 
+typedef struct iotshdDev_MQTTAgentSubscribeContext
+{
+    iotshdDev_MQTTAgentUserContext_t * pUserContext;
+    MQTTAgentSubscribeArgs_t * pxSubscribeArgs;
+
+    const char * pcTopicFilterString;
+    uint16_t usTopicFilterLength;
+
+    IncomingPubCallback_t pxIncomingPublishCallback;
+    void * pvIncomingPublishCallbackContext;
+
+} iotshdDev_MQTTAgentSubscribeContext_t;
+
+static void prvAgetSubscribeCommandCallback( void * pxCommandContext,
+                                             MQTTAgentReturnInfo_t * pxReturnInfo )
+{
+    bool xSubscriptionAdded = false;
+    iotshdDev_MQTTAgentSubscribeContext_t * pSubscribeContext = ( iotshdDev_MQTTAgentSubscribeContext_t * )pxCommandContext;
+    iotshdDev_MQTTAgentUserContext_t * pUserContext;
+    MQTTAgentSubscribeArgs_t * pxSubscribeArgs;
+    
+    if( pSubscribeContext != NULL )
+    {
+        pUserContext = pSubscribeContext->pUserContext;
+        pxSubscribeArgs = pSubscribeContext->pxSubscribeArgs;
+
+        /* Store the result in the application defined context so the task that
+         * initiated the subscribe can check the operation's status.  Also send the
+         * status as the notification value.  These things are just done for
+         * demonstration purposes. */
+        pUserContext->xReturnStatus = pxReturnInfo->returnCode;
+
+        /* Check if the subscribe operation is a success. Only one topic is
+         * subscribed by this demo. */
+        if( pxReturnInfo->returnCode == MQTTSuccess )
+        {
+            /* Add subscription so that incoming publishes are routed to the application
+             * callback. */
+            xSubscriptionAdded = addSubscription( xGlobalSubscriptionList,
+                                                  pxSubscribeArgs->pSubscribeInfo->pTopicFilter,
+                                                  pxSubscribeArgs->pSubscribeInfo->topicFilterLength,
+                                                  pSubscribeContext->pxIncomingPublishCallback,
+                                                  pSubscribeContext->pvIncomingPublishCallbackContext );
+
+            if( xSubscriptionAdded == false )
+            {
+                LogError( ( "Failed to register an incoming publish callback for topic %.*s.",
+                            pxSubscribeArgs->pSubscribeInfo->topicFilterLength,
+                            pxSubscribeArgs->pSubscribeInfo->pTopicFilter ) );
+            }
+        }
+
+        /* Notify the thread waiting for the response. */
+        iotshdPal_syncEventSet( pUserContext->pSyncEvent );
+    }
+}
+
 MQTTStatus_t iotshdDev_MQTTAgentAddSubscription( iotshdDev_MQTTAgentUserContext_t * pUserContext,
                                                  const char * pcTopicFilterString,
                                                  uint16_t usTopicFilterLength,
@@ -472,7 +577,91 @@ MQTTStatus_t iotshdDev_MQTTAgentAddSubscription( iotshdDev_MQTTAgentUserContext_
                                                  void * pvIncomingPublishCallbackContext,
                                                  uint32_t blockTimeMs )
 {
-    return MQTTSuccess;
+    /* Subscribe to the topic first. */
+    MQTTStatus_t xCommandAdded;
+    MQTTAgentSubscribeArgs_t xSubscribeArgs;
+    MQTTSubscribeInfo_t xSubscribeInfo;
+    MQTTAgentCommandInfo_t xCommandParams = { 0 };
+    iotshdDev_MQTTAgentSubscribeContext_t xSubscribeContext = { 0 };
+    bool retStatus;
+
+    /* Complete the subscribe information.  The topic string must persist for
+     * duration of subscription! */
+    xSubscribeInfo.pTopicFilter = pcTopicFilterString;
+    xSubscribeInfo.topicFilterLength = ( uint16_t ) strlen( pcTopicFilterString );
+    xSubscribeInfo.qos = MQTTQoS1;
+    xSubscribeArgs.pSubscribeInfo = &xSubscribeInfo;
+    xSubscribeArgs.numSubscriptions = 1;
+
+    xCommandParams.blockTimeMs = blockTimeMs;
+    xCommandParams.cmdCompleteCallback = prvAgetSubscribeCommandCallback;
+    xCommandParams.pCmdCompleteCallbackContext = &xSubscribeContext;
+
+    xSubscribeContext.pUserContext = pUserContext;
+    xSubscribeContext.pxSubscribeArgs = &xSubscribeArgs;
+    
+    xSubscribeContext.pcTopicFilterString = pcTopicFilterString;
+    xSubscribeContext.usTopicFilterLength = usTopicFilterLength;
+    
+    xSubscribeContext.pxIncomingPublishCallback = pxIncomingPublishCallback;
+    xSubscribeContext.pvIncomingPublishCallbackContext = pvIncomingPublishCallbackContext;
+
+    xCommandAdded = MQTTAgent_Subscribe( &xGlobalMqttAgentContext,
+                                         &xSubscribeArgs,
+                                         &xCommandParams );
+    if( xCommandAdded == MQTTSuccess )
+    {
+        /* Waiting for the command complete. */
+        printf( "command success\r\n" );
+        ( void ) iotshdPal_syncEventWait( pUserContext->pSyncEvent, 0 );
+        retStatus = iotshdPal_syncEventWait( pUserContext->pSyncEvent, blockTimeMs );
+        if( retStatus != true )
+        {
+            /* TODO : handle if the callback is not called situation here.
+             * the stack memory should not be used in the callback. */
+        }
+    }
+    else
+    {
+        printf( "Add command fail\r\n" );
+    }
+
+    return xCommandAdded;
+}
+
+static void prvAgetUnsubscribeCommandCallback( void * pxCommandContext,
+                                               MQTTAgentReturnInfo_t * pxReturnInfo )
+{
+    bool xUnsubscriptionAdded = false;
+    iotshdDev_MQTTAgentSubscribeContext_t * pSubscribeContext = ( iotshdDev_MQTTAgentSubscribeContext_t * )pxCommandContext;
+    iotshdDev_MQTTAgentUserContext_t * pUserContext;
+    MQTTAgentSubscribeArgs_t * pxSubscribeArgs;
+    
+    if( pSubscribeContext != NULL )
+    {
+        pUserContext = pSubscribeContext->pUserContext;
+        pxSubscribeArgs = pSubscribeContext->pxSubscribeArgs;
+
+        /* Store the result in the application defined context so the task that
+         * initiated the subscribe can check the operation's status.  Also send the
+         * status as the notification value.  These things are just done for
+         * demonstration purposes. */
+        pUserContext->xReturnStatus = pxReturnInfo->returnCode;
+
+        /* Check if the subscribe operation is a success. Only one topic is
+         * subscribed by this demo. */
+        if( pxReturnInfo->returnCode == MQTTSuccess )
+        {
+            /* Add subscription so that incoming publishes are routed to the application
+             * callback. */
+            removeSubscription( xGlobalSubscriptionList,
+                                pxSubscribeArgs->pSubscribeInfo->pTopicFilter,
+                                pxSubscribeArgs->pSubscribeInfo->topicFilterLength );
+        }
+
+        /* Notify the thread waiting for the response. */
+        iotshdPal_syncEventSet( pUserContext->pSyncEvent );
+    }
 }
 
 MQTTStatus_t iotshdDev_MQTTAgentRemoveSubscription( iotshdDev_MQTTAgentUserContext_t * pUserContext,
@@ -482,5 +671,156 @@ MQTTStatus_t iotshdDev_MQTTAgentRemoveSubscription( iotshdDev_MQTTAgentUserConte
                                                     void * pvIncomingPublishCallbackContext,
                                                     uint32_t blockTimeMs )
 {
-    return MQTTSuccess;
+    /* Unubscribe to the topic first. */
+    MQTTStatus_t xCommandAdded;
+    MQTTAgentSubscribeArgs_t xSubscribeArgs;
+    MQTTSubscribeInfo_t xSubscribeInfo;
+    MQTTAgentCommandInfo_t xCommandParams = { 0 };
+    iotshdDev_MQTTAgentSubscribeContext_t xSubscribeContext = { 0 };
+    bool retStatus;
+
+    /* Complete the subscribe information.  The topic string must persist for
+     * duration of subscription! */
+    xSubscribeInfo.pTopicFilter = pcTopicFilterString;
+    xSubscribeInfo.topicFilterLength = ( uint16_t ) strlen( pcTopicFilterString );
+    xSubscribeInfo.qos = MQTTQoS1;
+    xSubscribeArgs.pSubscribeInfo = &xSubscribeInfo;
+    xSubscribeArgs.numSubscriptions = 1;
+
+    xCommandParams.blockTimeMs = blockTimeMs;
+    xCommandParams.cmdCompleteCallback = prvAgetUnsubscribeCommandCallback;
+    xCommandParams.pCmdCompleteCallbackContext = &xSubscribeContext;
+
+    xSubscribeContext.pUserContext = pUserContext;
+    xSubscribeContext.pxSubscribeArgs = &xSubscribeArgs;
+    
+    xSubscribeContext.pcTopicFilterString = pcTopicFilterString;
+    xSubscribeContext.usTopicFilterLength = usTopicFilterLength;
+    
+    xSubscribeContext.pxIncomingPublishCallback = pxIncomingPublishCallback;
+    xSubscribeContext.pvIncomingPublishCallbackContext = pvIncomingPublishCallbackContext;
+
+    xCommandAdded = MQTTAgent_Unsubscribe( &xGlobalMqttAgentContext,
+                                           &xSubscribeArgs,
+                                           &xCommandParams );
+    if( xCommandAdded == MQTTSuccess )
+    {
+        /* Waiting for the command complete. */
+        ( void ) iotshdPal_syncEventWait( pUserContext->pSyncEvent, 0 );
+        retStatus = iotshdPal_syncEventWait( pUserContext->pSyncEvent, blockTimeMs );
+        if( retStatus != true )
+        {
+            /* TODO : handle if the callback is not called situation here.
+             * the stack memory should not be used in the callback. */
+        }
+    }
+    else
+    {
+        printf( "Add command fail\r\n" );
+    }
+
+    return xCommandAdded;
+}
+
+void mqttAgentEnqueuePublishCallback( void * pCallbackContext, MQTTPublishInfo_t * pPublsihInfo )
+{
+    iotshdDev_MQTTAgentUserContext_t * pUserContext = ( iotshdDev_MQTTAgentUserContext_t * ) pCallbackContext;
+    iotshdDev_MQTTAgentQueueItem_t * pQueueItem;
+    size_t requiredTopicPayloadSize = 0;
+    bool retStatus;
+
+    /* Get the free slot from free incoming publish queue. */
+    retStatus = iotshdPal_syncQueueReceive( pUserContext->pFreePublishMessageQueue, &pQueueItem, 0 );
+    
+    if( retStatus == true )
+    {
+        /* Dup the publish info structure. */
+        memcpy( &pQueueItem->publishInfo, pPublsihInfo, sizeof( MQTTPublishInfo_t ) );
+
+        /* Calcualte required topic payload size. */
+        requiredTopicPayloadSize = pPublsihInfo->topicNameLength + 1U + pPublsihInfo->payloadLength + 1U;
+
+        if( pQueueItem->topicPayloadBuffer != NULL )
+        {
+            if( pQueueItem->topicPayloadBufferSize < requiredTopicPayloadSize )
+            {
+                /* The buffer size is not enough. Re-allocate a new buffer. */
+                iotshdPal_Free( pQueueItem->topicPayloadBuffer );
+                pQueueItem->topicPayloadBuffer = NULL;
+                pQueueItem->topicPayloadBufferSize = 0;
+            }
+        }
+
+        if( pQueueItem->topicPayloadBuffer == NULL )
+        {
+            pQueueItem->topicPayloadBuffer = iotshdPal_Malloc( requiredTopicPayloadSize );
+            pQueueItem->topicPayloadBufferSize = requiredTopicPayloadSize;
+        }
+
+        memcpy( pQueueItem->topicPayloadBuffer, pPublsihInfo->pTopicName, pPublsihInfo->topicNameLength );
+        pQueueItem->topicPayloadBuffer[ pPublsihInfo->topicNameLength ] = '\0';
+        pQueueItem->publishInfo.pTopicName = ( char * )pQueueItem->topicPayloadBuffer;
+
+        memcpy( &( pQueueItem->topicPayloadBuffer[ pPublsihInfo->topicNameLength + 1U ] ),
+                pPublsihInfo->pPayload,
+                pPublsihInfo->payloadLength );
+        pQueueItem->topicPayloadBuffer[ pPublsihInfo->topicNameLength + 1U + pPublsihInfo->payloadLength ] = '\0';
+        pQueueItem->publishInfo.pPayload = ( char * )( &pQueueItem->topicPayloadBuffer[ pPublsihInfo->topicNameLength + 1U ] );
+
+        /* Enqueue the incomming publish. */
+        iotshdPal_syncQueueSend( pUserContext->pIncommingPublishQueue, &pQueueItem, 0U );
+    }
+}
+
+MQTTStatus_t iotshdDev_MQTTAgentAddSubscriptionWithQueue( iotshdDev_MQTTAgentUserContext_t * pUserContext,
+                                                  const char * pcTopicFilterString,
+                                                  uint16_t usTopicFilterLength,
+                                                  uint32_t blockTimeMs )
+{
+    return iotshdDev_MQTTAgentAddSubscription( pUserContext,
+                                               pcTopicFilterString,
+                                               usTopicFilterLength,
+                                               mqttAgentEnqueuePublishCallback,
+                                               pUserContext,
+                                               blockTimeMs );
+}
+
+iotshdDev_MQTTAgentQueueItem_t * iotshdDev_MQTTAgentDequeueIncommingPublish( iotshdDev_MQTTAgentUserContext_t * pUserContext,
+                                                                             uint32_t blockTimeMs )
+{
+    MQTTPublishInfo_t * pPublishInfo = NULL;
+    iotshdDev_MQTTAgentQueueItem_t * pQueueItem = NULL;
+    bool retStatus;
+    retStatus = iotshdPal_syncQueueReceive( pUserContext->pIncommingPublishQueue, &pQueueItem, blockTimeMs );
+    return pQueueItem;
+}
+
+void iotshdDev_MQTTAgentFreeIncommingPublish( iotshdDev_MQTTAgentUserContext_t * pUserContext,
+                                              iotshdDev_MQTTAgentQueueItem_t * pQueueItem,
+                                              bool freeBuffer )
+{
+    if( freeBuffer == true )
+    {
+        if( pQueueItem->topicPayloadBuffer != NULL )
+        {
+            iotshdPal_Free( pQueueItem->topicPayloadBuffer );
+            pQueueItem->topicPayloadBuffer = NULL;
+            pQueueItem->topicPayloadBufferSize = 0;
+        }
+    }
+    memset( &pQueueItem->publishInfo, 0, sizeof( MQTTPublishInfo_t ) );
+    iotshdPal_syncQueueSend( pUserContext->pFreePublishMessageQueue, &pQueueItem, 0 );
+}
+
+MQTTStatus_t iotshdDev_MQTTAgentRemoveSubscriptionWithQueue( iotshdDev_MQTTAgentUserContext_t * pUserContext,
+                                                             const char * pcTopicFilterString,
+                                                             uint16_t usTopicFilterLength,
+                                                             uint32_t blockTimeMs )
+{
+    return iotshdDev_MQTTAgentRemoveSubscription( pUserContext,
+                                                  pcTopicFilterString,
+                                                  usTopicFilterLength,
+                                                  mqttAgentEnqueuePublishCallback,
+                                                  pUserContext,
+                                                  blockTimeMs );
 }

@@ -84,25 +84,116 @@ static void establisihMQTTConnect( void )
 {
 }
 
+static bool messageReceiveFlag = false;
+static void prvDataModelHandlerIncommingPublish( void * pvIncomingPublishCallbackContext,
+                                                 MQTTPublishInfo_t * pxPublishInfo )
+{
+    messageReceiveFlag = true;
+}
+
 void prvDataModelHandlerThread( void * pParam )
 {
     MQTTPublishInfo_t xPublishInfo = { 0 };
+    iotshdDev_MQTTAgentQueueItem_t * pQueueItem;
 
     iotshdDev_MQTTAgentUserContext_t * pUserContext;
 
     xPublishInfo.qos = 1;
     xPublishInfo.pTopicName = "test";
     xPublishInfo.topicNameLength = 4;
-    xPublishInfo.pPayload = "HelloWorld";
-    xPublishInfo.payloadLength = 10;
+    xPublishInfo.pPayload = "HelloWorld\r\n";
+    xPublishInfo.payloadLength = 12;
 
     pUserContext = iotshdDev_MQTTAgentCreateUserContext( 10 );
 
+
     while( 1 )
     {
+        /* Subscribe the message topic. */
+        iotshdDev_MQTTAgentAddSubscription( pUserContext,
+                                            "test",
+                                            4,
+                                            prvDataModelHandlerIncommingPublish,
+                                            NULL,
+                                            5000 );
+        /* Publish the message. */
+        printf( "publish message\r\n" );
+        messageReceiveFlag = false;
+        iotshdDev_MQTTAgentPublish( pUserContext, &xPublishInfo, 100 );
+
+        /* Waiting for the message received. */
+        sleep( 3 );
+        if( messageReceiveFlag == true )
+        {
+            printf( "Expected message is received\r\n" );
+        }
+        else
+        {
+            printf( "!!! Expected message is not received\r\n" );
+        }
+
+        /* Unsubscribe the message topic. */
+        iotshdDev_MQTTAgentRemoveSubscription( pUserContext,
+                                               "test",
+                                               4,
+                                               prvDataModelHandlerIncommingPublish,
+                                               NULL,
+                                               5000 );
+
+        /* Publish the message. */
+        printf( "publish message\r\n" );
+        messageReceiveFlag = false;
+        iotshdDev_MQTTAgentPublish( pUserContext, &xPublishInfo, 100 );
+
+        /* Waiting for the message received. */
+        sleep( 3 );
+        if( messageReceiveFlag == true )
+        {
+            printf( "!!! Not expected message is received\r\n" );
+        }
+        else
+        {
+            printf( "Not expected message is not received\r\n" );
+        }
+
+        /* subscription with queue. */
+        iotshdDev_MQTTAgentAddSubscriptionWithQueue( pUserContext,
+                                                     "test",
+                                                     4,
+                                                     5000 );
+
+        /* Publish the message. */
         printf( "publish message\r\n" );
         iotshdDev_MQTTAgentPublish( pUserContext, &xPublishInfo, 100 );
-        sleep( 5 );
+        iotshdDev_MQTTAgentPublish( pUserContext, &xPublishInfo, 100 );
+
+        /* We should be able to receive from queue twice. */
+        pQueueItem = iotshdDev_MQTTAgentDequeueIncommingPublish( pUserContext, 5000 );
+        printf( "First queue item %s : %s\r\n", pQueueItem->publishInfo.pTopicName, pQueueItem->publishInfo.pPayload ); 
+        iotshdDev_MQTTAgentFreeIncommingPublish( pUserContext, pQueueItem, false );
+
+        pQueueItem = iotshdDev_MQTTAgentDequeueIncommingPublish( pUserContext, 5000 );
+        printf( "Second queue item %s : %s\r\n", pQueueItem->publishInfo.pTopicName, pQueueItem->publishInfo.pPayload );
+        iotshdDev_MQTTAgentFreeIncommingPublish( pUserContext, pQueueItem, false );
+
+        /* subscription with queue. */
+        iotshdDev_MQTTAgentRemoveSubscriptionWithQueue( pUserContext,
+                                                        "test",
+                                                        4,
+                                                        5000 );
+
+        /* We should not be able to receive from queue twice. */
+        pQueueItem = iotshdDev_MQTTAgentDequeueIncommingPublish( pUserContext, 1000 );
+        if( pQueueItem != NULL )
+        {
+            printf( "!!! receive unexpected incomming from queue\r\n" );
+        }
+
+        pQueueItem = iotshdDev_MQTTAgentDequeueIncommingPublish( pUserContext, 1000 );
+        if( pQueueItem != NULL )
+        {
+            printf( "!!! receive unexpected incomming from queue\r\n" );
+        }
     }
 }
 
